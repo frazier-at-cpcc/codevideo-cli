@@ -1,0 +1,34 @@
+# Keep the build context small and free of secrets. Docker does NOT read
+# .gitignore, so anything to exclude from `COPY . .` must be listed here.
+# Only non-source is excluded — every Go package dir (cli, cloud, mail, files,
+# utils, constants, server, types, puppeteer-runner) is kept.
+
+# VCS / OS
+.git
+.gitignore
+.github
+.vscode
+.DS_Store
+
+# Secrets & logs
+.env
+*.log
+
+# Sample media & transient render output (not needed to build or run the worker)
+*.mp4
+*.webm
+output/
+data/
+tmp/
+
+# Prebuilt binaries — rebuilt inside the image
+/codevideo
+/codevideo-cli
+
+# Node deps & managed Chrome — reinstalled / provided by the base image
+**/node_modules
+puppeteer-runner/chrome/
+chrome/
+
+# npm release workspace — unrelated to the Docker image build
+npm/

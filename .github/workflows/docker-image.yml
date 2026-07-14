@@ -1,0 +1,72 @@
+name: Docker image
+
+# Build and push the render-worker image to Docker Hub. Runs on the same v* tags
+# as the npm release (kept in a separate workflow so a registry hiccup doesn't
+# block the npm publish, and vice versa). workflow_dispatch builds a branch-tagged
+# image for testing without cutting a release.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Gracefully no-op if the Docker Hub creds aren't configured, rather than
+      # failing the run (e.g. on a fork).
+      - name: Check Docker Hub credentials
+        id: creds
+        run: |
+          if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ] && [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN not set — skipping image build/push"
+          fi
+
+      - name: Docker metadata (tags + version)
+        if: steps.creds.outputs.present == 'true'
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: fullstackcraft/codevideo-cli
+          tags: |
+            type=semver,pattern={{version}}
+            type=ref,event=branch
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Set up QEMU (arm64 emulation)
+        if: steps.creds.outputs.present == 'true'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        if: steps.creds.outputs.present == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: steps.creds.outputs.present == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push (linux/amd64 + linux/arm64)
+        if: steps.creds.outputs.present == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

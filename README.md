@@ -126,24 +126,50 @@ nohup ./codevideo -m serve &
 
 This will watch for manifest files in /tmp/v3/new and process them as they arrive. The server will output the video to the `output` folder.
 
-## Docker 
+## Docker
 
-Build the container
+The render worker ships as a multi-arch image (`linux/amd64`, `linux/arm64`) on
+Docker Hub as `fullstackcraft/codevideo-cli`. CI builds and pushes it on every `v*`
+tag — see `.github/workflows/docker-image.yml`.
 
-```shell
-docker build -t codevideo .
+### As the API render worker (serve mode)
+
+The [codevideo-api](https://github.com/codevideo/codevideo-api) compose stack pulls
+this image and runs it in serve mode. It's a filesystem-queue worker — no published
+port — that shares the API's render queue through a bind mount and reads its secrets
+(S3, Clerk, Slack, Mailjet) from the central `.env`:
+
+```yaml
+  codevideo-cli:
+    image: fullstackcraft/codevideo-cli:0.0.8   # pin to a release
+    restart: always
+    init: true
+    shm_size: "1gb"
+    volumes:
+      - ./tmp/v3/:/work/tmp/v3/
+    env_file: .env
+    environment:
+      - CODEVIDEO_WORK_DIR=/work/tmp/v3
 ```
 
-Run in server mode (default)
+### Build it yourself
 
 ```shell
-docker run -p 8080:8080 -v $(pwd)/.env:/.env -v $(pwd)/output:/app/output codevideo
+docker build -t fullstackcraft/codevideo-cli:dev .
 ```
 
-# Run with specific actions
+### One-off CLI render (no server)
+
+Mount an env file and an output dir, then pass actions directly (this overrides the
+default `-m serve`):
 
 ```shell
-docker run -v $(pwd)/.env:/.env -v $(pwd)/output:/app/output codevideo -p "[{\"name\":\"author-speak-before\",\"value\":\"Let's learn how to use the print function in Python!\"}]"
+docker run --rm \
+  -e CODEVIDEO_OUTPUT_DIR=/app/output \
+  -v "$(pwd)/.env:/app/.env" \
+  -v "$(pwd)/output:/app/output" \
+  fullstackcraft/codevideo-cli:dev \
+  -p "[{\"name\":\"author-speak-before\",\"value\":\"Let's learn how to use the print function in Python!\"}]"
 ```
 
 ## For Developers

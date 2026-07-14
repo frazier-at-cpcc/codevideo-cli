@@ -1,42 +1,59 @@
-# Start with zenika/alpine-chrome:with-puppeteer as base image for Puppeteer support
-FROM zenika/alpine-chrome:with-puppeteer AS base
+# codevideo-cli render worker image (multi-stage).
+#
+# Build stage compiles the Go CLI with the exact toolchain go.mod pins (1.26) —
+# don't rely on the runtime image's packaged Go, which lags. Runtime stage is
+# zenika/alpine-chrome:with-puppeteer (Chromium + Node + Puppeteer) plus ffmpeg
+# (the webm -> mp4 step shells out to it). Published to Docker Hub as
+# fullstackcraft/codevideo-cli and pulled by the codevideo-api compose stack.
 
-# Install Go
-RUN apk add --no-cache go git
+# ---- build: compile the static Go binary --------------------------------------
+FROM golang:1.26-alpine AS build
+RUN apk add --no-cache git
+WORKDIR /src
 
-# Set working directory
-WORKDIR /app
-
-# Copy Go module files first for better layer caching
+# Go deps first for layer caching.
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy the rest of the Go source code
+# CGO off -> a fully static binary that runs on the Alpine runtime base. VERSION
+# is injected by release builds (consumed by main.go's `var version`).
 COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION}" -o /out/codevideo
 
-# Build the Go CLI application
-RUN go build -o codevideo
+# ---- runtime: Chromium + Node/Puppeteer + ffmpeg ------------------------------
+FROM zenika/alpine-chrome:with-puppeteer AS runtime
 
-# Install Node.js dependencies for puppeteer-runner
-WORKDIR /app/puppeteer-runner
-RUN npm install
+# apk needs root; Chrome runs with --no-sandbox, so root is expected here (see
+# the --no-sandbox note in recordVideoV3.js).
+USER root
+RUN apk add --no-cache ffmpeg
 
-# Return to app directory
 WORKDIR /app
 
-# Create a volume for output videos
-VOLUME /app/output
+# The compiled worker. The Gatsby static site is go:embed'd into the binary, so
+# nothing else is needed for the manifest/static servers.
+COPY --from=build /out/codevideo /app/codevideo
 
-# Set environment variables from .env file at runtime
-# Use .env.example as default
-COPY .env.example /.env.example
-# Create empty .env file that can be overridden by mounting
-RUN touch /.env
+# The Puppeteer runner + its Node deps. server.go execs
+# `node <execDir>/puppeteer-runner/recordVideoV3.js`, so it must sit next to the
+# binary. Chromium comes from the base image — no browser download here.
+COPY puppeteer-runner/ /app/puppeteer-runner/
+WORKDIR /app/puppeteer-runner
+RUN npm install
+WORKDIR /app
 
-# Expose port for server mode
-EXPOSE 8080
+# Runtime config for the containerized serve worker:
+#   CODEVIDEO_CHROME_PATH - resolveChromeExecutable() honors this first, so pin
+#     the base image's Chromium instead of relying on PATH resolution.
+#   CODEVIDEO_WORK_DIR    - the shared render queue the API bind-mounts in. Go's
+#     WorkFolder()/VideoFolder() and the --manifest-path/--output-webm args
+#     passed to the Node runner all derive from it, keeping both sides in sync.
+ENV CODEVIDEO_CHROME_PATH=/usr/bin/chromium-browser \
+    CODEVIDEO_WORK_DIR=/work/tmp/v3
 
-# Set entrypoint
+# Filesystem-queue worker: no inbound port. The manifest (:7000) and static
+# (:7001) servers it starts are reached only by its own Puppeteer over
+# localhost, so nothing is published.
 ENTRYPOINT ["/app/codevideo"]
-# Default command (can be overridden)
 CMD ["-m", "serve"]
