@@ -162,8 +162,25 @@ func ProcessJob(manifestPath string, mode string, outputPath string) {
 
 	log.Printf("Converted webm to mp4 for job %s", uuid)
 
-	// we only need to upload to S3 and update clerk data if we are in serve mode
-	if mode == "serve" {
+	// Self-hosted development mode (the API writes environment=development into
+	// the manifest when ENVIRONMENT=development): no S3, no Clerk, no email.
+	// Keep the finished mp4 under the output folder so it can be served locally.
+	if mode == "serve" && strings.EqualFold(environment, "development") {
+		outputDir := constants.OutputFolder()
+		if err := os.MkdirAll(outputDir, 0755); err != nil {
+			log.Printf("Failed to create output folder for job %s: %v", uuid, err)
+			utils.AddErrorToManifest(manifestPath, err.Error())
+			return
+		}
+		finalPath := filepath.Join(outputDir, uuid+".mp4")
+		if err := utils.CopyFile(mp4Path, finalPath); err != nil {
+			log.Printf("Failed to copy mp4 for job %s: %v", uuid, err)
+			utils.AddErrorToManifest(manifestPath, err.Error())
+			return
+		}
+		log.Printf("Dev mode: mp4 for job %s saved to %s", uuid, finalPath)
+	} else if mode == "serve" {
+		// we only need to upload to S3 and update clerk data if we are in serve mode
 		// Read and upload the mp4 to S3.
 		mp4Bytes, err := os.ReadFile(mp4Path)
 		if err != nil {
