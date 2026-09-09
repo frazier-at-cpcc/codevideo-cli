@@ -60,6 +60,19 @@ func WatchForManifestFiles() {
 
 	log.Println("Watching for new manifest files in", constants.NewFolder())
 
+	// Startup sweep: a manifest written while the worker was down (or restarting)
+	// never produces a create event, so dispatch anything already queued.
+	if stale, err := filepath.Glob(filepath.Join(constants.NewFolder(), "*.json")); err == nil {
+		for _, manifestPath := range stale {
+			log.Printf("Startup sweep: processing existing manifest %s", manifestPath)
+			go func(filePath string) {
+				semaphore <- struct{}{}
+				defer func() { <-semaphore }()
+				ProcessJob(filePath, "serve", "")
+			}(manifestPath)
+		}
+	}
+
 	// Listen for filesystem events.
 	for {
 		select {
