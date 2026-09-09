@@ -21,13 +21,25 @@ COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION}" -o /out/codevideo
 
-# ---- runtime: Chromium + Node/Puppeteer + ffmpeg ------------------------------
-FROM zenika/alpine-chrome:with-puppeteer AS runtime
+# ---- runtime: Google Chrome + Node + ffmpeg ------------------------------------
+# puppeteer-stream >= 3 loads its recorder extension through the devtools
+# `Extensions.loadUnpacked` command, which needs a current Chrome. The
+# zenika/alpine-chrome:with-puppeteer image stopped at Chromium 124, where that
+# command does not exist and every render fails with
+# "Protocol error (Extensions.loadUnpacked): 'Extensions.loadUnpacked' wasn't found".
+# Debian + google-chrome-stable tracks current Chrome. amd64 only (Google does
+# not publish an arm64 .deb); for arm64 substitute Debian's `chromium` package.
+FROM node:20-bookworm-slim AS runtime
 
-# apk needs root; Chrome runs with --no-sandbox, so root is expected here (see
-# the --no-sandbox note in recordVideoV3.js).
-USER root
-RUN apk add --no-cache ffmpeg
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends wget gnupg ca-certificates ffmpeg \
+       fonts-liberation fonts-noto-color-emoji fonts-dejavu-core \
+  && wget -qO- https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
+  && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+       > /etc/apt/sources.list.d/google-chrome.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends google-chrome-stable \
+  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -49,7 +61,7 @@ WORKDIR /app
 #   CODEVIDEO_WORK_DIR    - the shared render queue the API bind-mounts in. Go's
 #     WorkFolder()/VideoFolder() and the --manifest-path/--output-webm args
 #     passed to the Node runner all derive from it, keeping both sides in sync.
-ENV CODEVIDEO_CHROME_PATH=/usr/bin/chromium-browser \
+ENV CODEVIDEO_CHROME_PATH=/usr/bin/google-chrome-stable \
     CODEVIDEO_WORK_DIR=/work/tmp/v3
 
 # Filesystem-queue worker: no inbound port. The manifest (:7000) and static
